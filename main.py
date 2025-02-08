@@ -1,5 +1,6 @@
 import pandas as pd
 import glob
+import argparse
 from collections import defaultdict
 
 def load_chase_statements(folder_path):
@@ -51,5 +52,8 @@ def main(folder_path):
             print(f"Vendor: {vendor}, Amount: ${charge['amount']:.2f}, Recurs in Months: {', '.join(map(str, charge['months']))}")
 
 if __name__ == "__main__":
-    folder_path = input("Enter the path to the folder containing your Chase statement CSV files: ")
-    main(folder_path)
+    parser = argparse.ArgumentParser(description="Analyze Chase credit card statements for recurring charges.")
+    parser.add_argument("folder_path", type=str, help="Path to the folder containing Chase statement CSV files.")
+    args = parser.parse_args()
+    
+    main(args.folder_path)
