@@ -1,13 +1,23 @@
+"""
+Steps to download CSV:
+ Chase website, lick "Accounts"
+ Click the "more" dropdown menu
+ Choose "spending summary ", top right(on laptop, left on mobile) 
+ Theres a link that says "download transactions" CSV is an option in the download drop-downs
+"""
+
 import pandas as pd
 import glob
 import argparse
+import os
 from collections import defaultdict
 
 def load_chase_statements(folder_path):
     """
     Load multiple CSV files from the specified folder and combine them into a single DataFrame.
     """
-    files = glob.glob(f"{folder_path}/*.csv")
+    folder_path = os.path.abspath(folder_path)  # Convert to absolute path if relative
+    files = glob.glob(os.path.join(folder_path, "*.csv")) + glob.glob(os.path.join(folder_path, "*.CSV"))
     df_list = [pd.read_csv(file) for file in files]
     df = pd.concat(df_list, ignore_index=True)
     return df
@@ -53,7 +63,7 @@ def main(folder_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze Chase credit card statements for recurring charges.")
-    parser.add_argument("folder_path", type=str, help="Path to the folder containing Chase statement CSV files.")
+    parser.add_argument("folder_path", type=str, nargs='?', default=os.getcwd()+"/statements", help="Path to the folder containing Chase statement CSV files. Defaults to current directory.")
     args = parser.parse_args()
     
     main(args.folder_path)
