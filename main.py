@@ -3,12 +3,11 @@ import glob
 import argparse
 import os
 import json
+import matplotlib.pyplot as plt
+import seaborn as sns
 from collections import defaultdict
 
 def load_exclusions(file_path):
-    """
-    Load vendor, keyword, and exact charge exclusions from a JSON file.
-    """
     exclusions = {
         'recurring': {'vendors': set(), 'keywords': set(), 'charges': set()},
         'spending': {'vendors': set(), 'keywords': set(), 'charges': set()}
@@ -26,19 +25,13 @@ def load_exclusions(file_path):
     return exclusions
 
 def load_chase_statements(folder_path):
-    """
-    Load multiple CSV files from the specified folder and combine them into a single DataFrame.
-    """
-    folder_path = os.path.abspath(folder_path)  # Convert to absolute path if relative
+    folder_path = os.path.abspath(folder_path)
     files = glob.glob(os.path.join(folder_path, "*.csv")) + glob.glob(os.path.join(folder_path, "*.CSV"))
     df_list = [pd.read_csv(file) for file in files]
     df = pd.concat(df_list, ignore_index=True).drop_duplicates()
     return df
 
 def clean_data(df, exclusions, category):
-    """
-    Standardize column names, ensure correct data types, and apply exclusions.
-    """
     df.columns = [col.strip().lower().replace(" ", "_") for col in df.columns]
     df = df.rename(columns={
         'transaction_date': 'date',
@@ -47,9 +40,8 @@ def clean_data(df, exclusions, category):
     })
     df['date'] = pd.to_datetime(df['date'])
     df['charge'] = df['charge'].astype(float)
-    df = df.drop_duplicates(subset=['date', 'vendor', 'charge'])  # Remove exact duplicate transactions
+    df = df.drop_duplicates(subset=['date', 'vendor', 'charge'])
     
-    # Apply exclusions
     df = df[~df['vendor'].str.lower().isin(exclusions[category]['vendors'])]
     df = df[~df['vendor'].str.lower().apply(lambda x: any(keyword in x for keyword in exclusions[category]['keywords']))]
     df = df[~df['charge'].isin(exclusions[category]['charges'])]
@@ -57,22 +49,16 @@ def clean_data(df, exclusions, category):
     return df[['date', 'vendor', 'charge']]
 
 def find_recurring_charges(df):
-    """
-    Identify recurring charges based on vendors with the same charged amount appearing over multiple months.
-    Sort them by total amount spent.
-    """
     recurring_charges = defaultdict(lambda: defaultdict(lambda: {'total_spent': 0, 'months': set()}))
     
-    # Group by vendor and charge amount
     grouped = df.groupby(['vendor', 'charge'])
     for (vendor, charge), transactions in grouped:
         months = set(transactions['date'].dt.to_period('M'))
-        if len(months) > 2:  # Consider it recurring if found in at least 3 different months
+        if len(months) > 2:
             total_spent = charge * len(transactions)
             recurring_charges[vendor][charge]['total_spent'] = total_spent
             recurring_charges[vendor][charge]['months'] = months
     
-    # Flatten and sort by most negative total spent
     sorted_recurring = sorted(
         [(vendor, charge, data['total_spent'], data['months'])
          for vendor, charges in recurring_charges.items() for charge, data in charges.items()],
@@ -80,19 +66,46 @@ def find_recurring_charges(df):
     )
     return sorted_recurring
 
+def flag_subscription_keywords(df):
+    keywords = ['membership', 'subscription', 'renewal']
+    df['flagged'] = df['vendor'].str.lower().apply(lambda x: any(keyword in x for keyword in keywords))
+    return df[df['flagged']]
+
 def top_vendors_by_spending(df, top_n=25):
-    """
-    Identify the top vendors by total money spent (negative charges only).
-    """
-    vendor_spending = df[df['charge'] < 0].groupby('vendor')['charge'].sum().reset_index()
-    vendor_spending = vendor_spending.sort_values(by='charge', ascending=True)  # Sort by most negative
-    return vendor_spending.head(top_n)
+    top_vendors = df.groupby('vendor')['charge'].sum().sort_values().head(top_n)
+    return top_vendors.reset_index()
 
 def most_expensive_charges(df, top_n=25):
-    """
-    Identify the most expensive individual transactions (negative charges only).
-    """
-    return df[df['charge'] < 0].nsmallest(top_n, 'charge')
+    expensive_charges = df.nsmallest(top_n, 'charge')
+    return expensive_charges[['vendor', 'charge']]
+
+def generate_summary_report(top_vendors, expensive_charges, recurring_charges, flagged_subscriptions):
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    
+    sns.barplot(y=expensive_charges['vendor'], x=expensive_charges['charge'], palette='Reds_r', ax=axes[1, 0])
+    axes[0, 0].set_title("Most Expensive Charges")
+    axes[0, 0].set_xlabel("Charge Amount ($)")
+    axes[0, 0].set_ylabel("Vendor")
+    
+    sns.barplot(y=top_vendors['vendor'], x=top_vendors['charge'], palette='coolwarm', ax=axes[1, 1])
+    axes[1, 1].set_title("Top Vendors by Spending")
+    axes[1, 1].set_xlabel("Total Spent ($)")
+    axes[1, 1].set_ylabel("Vendor")
+    
+    flagged_vendors = flagged_subscriptions['vendor'].value_counts()
+    sns.barplot(y=flagged_vendors.index, x=flagged_vendors.values, palette='Blues_r', ax=axes[0, 1])
+    axes[0, 1].set_title("Flagged Subscription Transactions")
+    axes[0, 1].set_xlabel("Count")
+    axes[0, 1].set_ylabel("Vendor")
+    
+    recurring_df = pd.DataFrame(recurring_charges, columns=['Vendor', 'Charge', 'Total Spent', 'Months'])
+    sns.barplot(y=recurring_df['Vendor'], x=recurring_df['Total Spent'], palette='Purples_r', ax=axes[0, 0])
+    axes[1, 0].set_title("Recurring Charges Sorted by Total Spent")
+    axes[1, 0].set_xlabel("Total Spent ($)")
+    axes[1, 0].set_ylabel("Vendor")
+    
+    plt.tight_layout()
+    plt.show()
 
 def main(folder_path, exclusion_file):
     exclusions = load_exclusions(exclusion_file)
@@ -104,22 +117,15 @@ def main(folder_path, exclusion_file):
     df_spending = clean_data(df, exclusions, 'spending')
     top_vendors = top_vendors_by_spending(df_spending)
     expensive_charges = most_expensive_charges(df_spending)
+    flagged_subscriptions = flag_subscription_keywords(df_spending)
     
-    print("Potential Recurring Charges:")
-    for vendor, charge, total_spent, months in recurring_charges:
-        print(f"Vendor: {vendor}, Total Spent: ${total_spent:.2f}, Amount: ${charge:.2f}, Recurs in Months: {', '.join(map(str, months))}")
-    
-    print("\nTop Vendors by Spending:")
-    print(top_vendors)
-    
-    print("\nMost Expensive Charges:")
-    print(expensive_charges)
+    generate_summary_report(top_vendors, expensive_charges, recurring_charges, flagged_subscriptions)
 
 if __name__ == "__main__":
     default_folder = os.path.join(os.getcwd(), "statements")
-    parser = argparse.ArgumentParser(description="Analyze Chase credit card statements for recurring charges and top expenses.")
-    parser.add_argument("folder_path", type=str, nargs='?', default=default_folder, help="Path to the folder containing Chase statement CSV files. Defaults to ./statements.")
-    parser.add_argument("exclusion_file", type=str, nargs='?', default="exclusions.json", help="Path to the JSON file containing exclusions for vendors, keywords, and exact charges.")
+    parser = argparse.ArgumentParser(description="Analyze Chase credit card statements.")
+    parser.add_argument("folder_path", type=str, nargs='?', default=default_folder)
+    parser.add_argument("exclusion_file", type=str, nargs='?', default="exclusions.json")
     args = parser.parse_args()
     
     main(args.folder_path, args.exclusion_file)
