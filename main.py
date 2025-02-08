@@ -55,14 +55,14 @@ def find_recurring_charges(df):
     for (vendor, charge), transactions in grouped:
         months = set(transactions['date'].dt.to_period('M'))
         if len(months) > 2:
-            total_spent = charge * len(transactions)
+            total_spent = charge * len(months)
             recurring_charges[vendor][charge]['total_spent'] = total_spent
             recurring_charges[vendor][charge]['months'] = months
     
     sorted_recurring = sorted(
         [(vendor, charge, data['total_spent'], data['months'])
          for vendor, charges in recurring_charges.items() for charge, data in charges.items()],
-        key=lambda x: x[2]
+        key=lambda x: x[2], reverse=True
     )
     return sorted_recurring
 
@@ -79,30 +79,37 @@ def most_expensive_charges(df, top_n=25):
     expensive_charges = df.nsmallest(top_n, 'charge')
     return expensive_charges[['vendor', 'charge']]
 
+def print_results(recurring_charges, top_vendors, expensive_charges, flagged_subscriptions):
+    print("\nRecurring Charges:")
+    for vendor, charge, total_spent, months in sorted(recurring_charges, key=lambda x: x[2], reverse=True):
+        print(f"{vendor}: ${charge:.2f} per month, Total Spent: ${total_spent:.2f}, Months: {len(months)}")
+    
+    print("\nTop Vendors by Spending:")
+    print(top_vendors.to_string(index=False))
+    
+    print("\nMost Expensive Charges:")
+    print(expensive_charges.to_string(index=False))
+    
+    print("\nFlagged Subscription Transactions:")
+    print(flagged_subscriptions[['vendor', 'charge']].to_string(index=False))
+
 def generate_summary_report(top_vendors, expensive_charges, recurring_charges, flagged_subscriptions):
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
     
-    sns.barplot(y=expensive_charges['vendor'], x=expensive_charges['charge'], palette='Reds_r', ax=axes[1, 0])
-    axes[0, 0].set_title("Most Expensive Charges")
-    axes[0, 0].set_xlabel("Charge Amount ($)")
-    axes[0, 0].set_ylabel("Vendor")
-    
-    sns.barplot(y=top_vendors['vendor'], x=top_vendors['charge'], palette='coolwarm', ax=axes[1, 1])
-    axes[1, 1].set_title("Top Vendors by Spending")
-    axes[1, 1].set_xlabel("Total Spent ($)")
-    axes[1, 1].set_ylabel("Vendor")
-    
-    flagged_vendors = flagged_subscriptions['vendor'].value_counts()
-    sns.barplot(y=flagged_vendors.index, x=flagged_vendors.values, palette='Blues_r', ax=axes[0, 1])
-    axes[0, 1].set_title("Flagged Subscription Transactions")
-    axes[0, 1].set_xlabel("Count")
-    axes[0, 1].set_ylabel("Vendor")
-    
     recurring_df = pd.DataFrame(recurring_charges, columns=['Vendor', 'Charge', 'Total Spent', 'Months'])
-    sns.barplot(y=recurring_df['Vendor'], x=recurring_df['Total Spent'], palette='Purples_r', ax=axes[0, 0])
-    axes[1, 0].set_title("Recurring Charges Sorted by Total Spent")
-    axes[1, 0].set_xlabel("Total Spent ($)")
-    axes[1, 0].set_ylabel("Vendor")
+    recurring_df = recurring_df.sort_values(by='Total Spent', ascending=True)
+    sns.barplot(y=recurring_df['Vendor'], x=recurring_df['Total Spent'], hue=recurring_df['Vendor'], palette='Purples_r', ax=axes[0, 0], legend=False)
+    axes[0, 0].set_title("Recurring Charges Sorted by Total Spent")
+    
+    flagged_subscriptions = flagged_subscriptions.sort_values(by='charge', ascending=True)
+    sns.barplot(y=flagged_subscriptions['vendor'], x=flagged_subscriptions['charge'], hue=flagged_subscriptions['vendor'], palette='Blues_r', ax=axes[0, 1], legend=False)
+    axes[0, 1].set_title("Flagged Subscription Transactions")
+    
+    sns.barplot(y=expensive_charges['vendor'], x=expensive_charges['charge'], hue=expensive_charges['vendor'], palette='Reds_r', ax=axes[1, 1], legend=False)
+    axes[1, 1].set_title("Most Expensive Charges")
+    
+    sns.barplot(y=top_vendors['vendor'], x=top_vendors['charge'], hue=top_vendors['vendor'], palette='coolwarm', ax=axes[1, 0], legend=False)
+    axes[1, 0].set_title("Top Vendors by Spending")
     
     plt.tight_layout()
     plt.show()
@@ -119,13 +126,13 @@ def main(folder_path, exclusion_file):
     expensive_charges = most_expensive_charges(df_spending)
     flagged_subscriptions = flag_subscription_keywords(df_spending)
     
+    print_results(recurring_charges, top_vendors, expensive_charges, flagged_subscriptions)
     generate_summary_report(top_vendors, expensive_charges, recurring_charges, flagged_subscriptions)
 
 if __name__ == "__main__":
-    default_folder = os.path.join(os.getcwd(), "statements")
     parser = argparse.ArgumentParser(description="Analyze Chase credit card statements.")
-    parser.add_argument("folder_path", type=str, nargs='?', default=default_folder)
-    parser.add_argument("exclusion_file", type=str, nargs='?', default="exclusions.json")
+    parser.add_argument("--folder_path", type=str, default="statements")
+    parser.add_argument("--exclusion_file", type=str, default="exclusions.json")
     args = parser.parse_args()
     
     main(args.folder_path, args.exclusion_file)
